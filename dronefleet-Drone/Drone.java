@@ -1,6 +1,8 @@
 package com.example.sriram;
 
 import java.io.IOException;
+import java.net.Socket;
+import java.util.ArrayList;
 
 import io.dronefleet.mavlink.MavlinkConnection;
 import io.dronefleet.mavlink.common.CommandAck;
@@ -8,19 +10,38 @@ import io.dronefleet.mavlink.common.CommandLong;
 import io.dronefleet.mavlink.common.GlobalPositionInt;
 import io.dronefleet.mavlink.common.MavCmd;
 import io.dronefleet.mavlink.common.MavFrame;
+import io.dronefleet.mavlink.common.MavMissionType;
 import io.dronefleet.mavlink.common.MissionAck;
+import io.dronefleet.mavlink.common.MissionClearAll;
+import io.dronefleet.mavlink.common.MissionCount;
+import io.dronefleet.mavlink.common.MissionCurrent;
+import io.dronefleet.mavlink.common.MissionItemInt;
+import io.dronefleet.mavlink.common.MissionRequest;
 import io.dronefleet.mavlink.common.NavControllerOutput;
 import io.dronefleet.mavlink.common.PositionTargetTypemask;
 import io.dronefleet.mavlink.common.SetPositionTargetGlobalInt;
 import io.dronefleet.mavlink.common.SetPositionTargetLocalNed;
 
 public class Drone {
-    private MavlinkConnection connection;
+    private final String ip;
+    private final int port;
+    private final Socket socket;
+    private final MavlinkConnection connection;
     private final int system_id = 1;
     private final int component_id = 0;
 
-    public Drone(MavlinkConnection connection) {
-        this.connection = connection;
+    public Drone(String IP, int port) throws IOException {
+        this.ip = IP;
+        this.port = port;
+        this.socket = new Socket(this.ip, this.port);
+        this.connection = MavlinkConnection.create(socket.getInputStream(), socket.getOutputStream());
+    }
+
+    public Drone(String IP, String port) throws IOException {
+        this.ip = IP;
+        this.port = Integer.parseInt(port);
+        this.socket = new Socket(this.ip, this.port);
+        this.connection = MavlinkConnection.create(socket.getInputStream(), socket.getOutputStream());
     }
 
     public String set_mode(Modes mode) throws IOException{
@@ -51,7 +72,7 @@ public class Drone {
         connection.send1(system_id, component_id, command);
 
         CommandAck ack = getCommandAck();
-        System.out.println("Received acknowledgment: " + ack);
+        System.out.println("Received acknowledgment for Arming: " + ack);
         return ack.toString(); 
     }
 
@@ -86,11 +107,11 @@ public class Drone {
         connection.send1(system_id, component_id, command);
 
         CommandAck ack = (CommandAck) getCommandAck();
-        System.out.println("Received acknowledgment: " + ack);
+        System.out.println("Received acknowledgment for Takeoff: " + ack);
 
         while (true) {
             GlobalPositionInt globalPosition = getPositionPacket();
-            System.out.println("Received position: " + globalPosition);
+            // System.out.println("Received position: " + globalPosition);
             if (globalPosition.relativeAlt() / 1000 > 0.95 * target_altitude) {
                 break;
             }
@@ -111,7 +132,6 @@ public class Drone {
         return "Done";
     }
 
-
     public Object getPacket(Class payloadType) throws IOException {
         while (true) {
             Object message = connection.next().getPayload();
@@ -127,6 +147,10 @@ public class Drone {
 
     public MissionAck getMissionAck() throws IOException {
         return (MissionAck) getPacket(MissionAck.class);
+    }
+  
+    public MissionRequest getMissionItemRequest() throws IOException {
+        return (MissionRequest) getPacket(MissionRequest.class);
     }
 
     public GlobalPositionInt getPositionPacket() throws IOException {
@@ -226,6 +250,105 @@ public class Drone {
             System.out.println("Controller: " + navController);
             System.out.println();
             if (navController.wpDist() == 0) {
+                return;
+            }
+        }
+    }
+
+    public void clearMission() throws IOException {
+        MissionClearAll missionClear = MissionClearAll.builder()
+            .targetSystem(system_id)
+            .targetComponent(component_id)
+            .missionType(MavMissionType.MAV_MISSION_TYPE_MISSION)
+            .build();
+        
+        System.out.println("Sending mission clear command.");
+
+        connection.send1(system_id, component_id, missionClear);
+
+        MissionAck ack = getMissionAck();
+        System.out.println("Got acknowledgemnt for clearing mission. " + ack);
+    }
+
+    public void sendMissionCount(int count) throws IOException {
+        MissionCount missionCount = MissionCount.builder()
+            .targetSystem(system_id)
+            .targetComponent(component_id)
+            .count(count)
+            .missionType(MavMissionType.MAV_MISSION_TYPE_MISSION)
+            .build();
+
+        System.out.println("Sending mission count.");
+        connection.send1(system_id, component_id, missionCount);
+    }
+
+    public void sendMissionItem(Waypoint waypoint, int sequence) throws IOException {
+        MissionItemInt missionItem = MissionItemInt.builder()
+            .targetSystem(system_id)
+            .targetComponent(component_id)
+            .seq(sequence)
+            .frame(MavFrame.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT)
+            .command(MavCmd.MAV_CMD_NAV_WAYPOINT)
+            .current(0)
+            .autocontinue(1)
+            .x(waypoint.getScaledLatitude())
+            .y(waypoint.getScaledLongitude())
+            .z(waypoint.altitude)
+            .missionType(MavMissionType.MAV_MISSION_TYPE_MISSION)
+            .build();
+
+        //System.out.println("Sending Mission Item.");
+        connection.send1(system_id, component_id, missionItem);
+    }
+
+    public void do_mission(ArrayList<Waypoint> arr) throws IOException, InterruptedException {
+        MissionAck ack;
+        int count = arr.size() + 2;
+        int sequence = 0;
+        Waypoint waypoint;
+        MissionRequest request;
+        NavControllerOutput navPacket;
+
+        clearMission();
+
+        sendMissionCount(count);
+
+        request = getMissionItemRequest();
+        System.out.println("Received mission item request. " + request);
+
+        System.out.println("Sending duplicate of first missionItem. (Ignored)");
+        waypoint = arr.get(0);
+        sendMissionItem(waypoint, sequence++);
+
+        for (Waypoint wp: arr) {
+            request = getMissionItemRequest();
+            System.out.println("Received mission item request. " + request);
+
+            sendMissionItem(wp, sequence++);
+        }
+
+        request = getMissionItemRequest();
+        System.out.println("Received mission item request. " + request);
+        System.out.println("Sending duplicate of last missionItem. (For waiting mechanism)");
+        waypoint = arr.get(arr.size()-1);
+        sendMissionItem(waypoint, sequence++);    
+
+        ack = getMissionAck();
+        System.out.println("Received mission item acknowledgement. " + ack);
+
+        System.out.println("Setting mode to Auto.");
+
+        set_mode(Modes.AUTO);
+
+        while (true) {
+            MissionCurrent missionCurrent = (MissionCurrent) getPacket(MissionCurrent.class);
+            System.out.println("Current mission item: " + missionCurrent.seq());
+            // MissionItemReached missionItemReached = (MissionItemReached) getPacket(MissionItemReached.class);
+            // System.out.println("Mission status: " + missionItemReached);
+            navPacket = getNavControllerPacket();
+            System.out.println("Distance to next waypoint: " + navPacket.wpDist());
+            if (missionCurrent.seq() == count-1) {
+                System.out.println("Reached final waypoint.");
                 return;
             }
         }

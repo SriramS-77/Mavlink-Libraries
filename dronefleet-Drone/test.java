@@ -1,16 +1,13 @@
 package com.example.sriram;
 
 import java.io.IOException;
-import java.net.Socket;
-
-import io.dronefleet.mavlink.MavlinkConnection;
 
 
 public class test {
 
-    public static void main(String[] args) throws IOException {
-        int system_id = 1;
-        int component_id = 0;
+    public static void main(String[] args) {
+        String IP = "127.0.0.1";
+        int port = 12345;
 
         // Open a serial connection to the drone
         System.out.println("Sriram - hello!!!");
@@ -19,11 +16,7 @@ public class test {
             //MavlinkConnection connection = MavlinkConnection.create(new FileInputStream(new File("/dev/ttyACM0")),
             //                                                new FileOutputStream(new File("/dev/ttyACM0")));
         
-            Socket socket = new Socket("127.0.0.1", 12345);
-
-            MavlinkConnection connection = MavlinkConnection.create(socket.getInputStream(), socket.getOutputStream());
-
-            Drone drone = new Drone(connection);
+            Drone drone = new Drone(IP, port);
 
             drone.set_mode(Modes.GUIDED);
 
