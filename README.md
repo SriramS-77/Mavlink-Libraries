@@ -1,2 +1,2 @@
 # Mavlink-Libraries
-Custom Mavlink Libraries built on top of pymavlink in Python and dronefleet in Java.
+High level API's for MavLink communication in Python, Java and JavaScript.
